@@ -1,0 +1,7 @@
+node_modules/
+.pi/
+*.log
+ccswitch-balance.json
+ccswitch-balance.json.tmp
+.DS_Store
+Thumbs.db

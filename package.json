@@ -1,0 +1,44 @@
+{
+  "name": "pi-ccswitch-balance",
+  "version": "1.2.0",
+  "description": "Show CCSwitch /v1/usage account balance in the Pi terminal footer.",
+  "author": "Koma-Chen",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Koma-Chen/pi-ccswitch-balance.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Koma-Chen/pi-ccswitch-balance/issues"
+  },
+  "homepage": "https://github.com/Koma-Chen/pi-ccswitch-balance#readme",
+  "type": "module",
+  "files": [
+    "index.ts",
+    "core.ts",
+    "lifecycle-operation-owner.ts",
+    "refresh-coordinator.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "CCSwitch",
+    "terminal",
+    "balance"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "check": "node --check index.ts && node --check core.ts && node --check lifecycle-operation-owner.ts && node --check refresh-coordinator.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
