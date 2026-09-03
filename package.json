@@ -1,6 +1,6 @@
 {
   "name": "pi-ccswitch-balance",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Show CCSwitch /v1/usage account balance in the Pi terminal footer.",
   "author": "Koma-Chen",
   "repository": {

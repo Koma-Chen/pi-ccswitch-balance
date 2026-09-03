@@ -1,12 +1,10 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Input, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Input, truncateToWidth } from "@earendil-works/pi-tui";
 import { watch, type FSWatcher } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { join } from "node:path";
 import {
 	AuthenticationError,
-	balanceColor,
 	CCSwitchClient,
 	type CCSwitchConfig,
 	type CCSwitchStore,
@@ -68,33 +66,6 @@ function formatTime(value: Date | undefined): string {
 	return value ? value.toLocaleString("zh-CN", { hour12: false }) : "尚未成功刷新";
 }
 
-/** 把 token 计数压成页脚可用的短格式。 */
-function formatTokens(count: number): string {
-	if (count < 1_000) return String(count);
-	if (count < 10_000) return `${(count / 1_000).toFixed(1)}k`;
-	if (count < 1_000_000) return `${Math.round(count / 1_000)}k`;
-	if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-	return `${Math.round(count / 1_000_000)}M`;
-}
-
-/** 页脚路径优先显示成 ~/...，减少占用宽度。 */
-function formatFooterCwd(cwd: string): string {
-	const home = process.env.HOME || process.env.USERPROFILE;
-	if (!home) return cwd;
-	const resolvedCwd = resolve(cwd);
-	const resolvedHome = resolve(home);
-	const relativeToHome = relative(resolvedHome, resolvedCwd);
-	const insideHome =
-		relativeToHome === "" ||
-		(relativeToHome !== ".." && !relativeToHome.startsWith(`..${sep}`) && !isAbsolute(relativeToHome));
-	return insideHome ? (relativeToHome === "" ? "~" : `~${sep}${relativeToHome}`) : cwd;
-}
-
-/** 其他扩展状态压成单行，避免撑破页脚。 */
-function sanitizeStatus(text: string): string {
-	return text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
-}
-
 /** 在 TUI 里收集 API Key，只显示掩码，避免明文落在输入行。 */
 async function promptApiKey(ctx: ExtensionContext): Promise<string | undefined> {
 	if (ctx.mode !== "tui") return undefined;
@@ -146,7 +117,6 @@ export default function (pi: ExtensionAPI) {
 	let deduction: { fromCents: number; toCents: number; amountCents: number; startedAt: number } | undefined;
 	let followUpTimers: Array<ReturnType<typeof setTimeout>> = [];
 	let sessionActive = false;
-	let requestFooterRender: () => void = () => {};
 	const accountOperations = new LifecycleOperationOwner();
 	let refreshCoordinator: RefreshCoordinator;
 
@@ -158,45 +128,29 @@ export default function (pi: ExtensionAPI) {
 		return cents / 100;
 	}
 
-	/** 根据接入状态、刷新结果和扣款动画生成页脚余额段。 */
-	function balanceStatus(): {
-		text: string;
-		color: "success" | "warning" | "error" | "dim";
-		lastTurnText?: string;
-	} {
+	/** 根据接入状态、刷新结果和扣款动画生成扩展状态行文案。 */
+	function balanceStatusText(): string {
 		const visibleBalance = displayedBalance();
 		let text: string;
-		let color: "success" | "warning" | "error" | "dim";
 		if (!activeSite && !config) {
 			text = `${sitePrefix()}余额: 无供应商`;
-			color = "dim";
 		} else if (!config) {
 			text = `${sitePrefix()}余额: 未接入 /ccswitch-login`;
-			color = "dim";
 		} else if (authInvalid) {
 			text = `${sitePrefix()}余额: 密钥失效 /ccswitch-login`;
-			color = "error";
 		} else if (usageUnsupported) {
 			text = `${sitePrefix()}余额: 该站无用量接口`;
-			color = "dim";
 		} else if (visibleBalance !== undefined && lastError) {
 			text = `${sitePrefix()}余额: ${formatBalance(visibleBalance)} (更新失败)`;
-			color = "warning";
 		} else if (visibleBalance !== undefined) {
 			text = `${sitePrefix()}余额: ${formatBalance(visibleBalance)}`;
-			color = balanceColor(visibleBalance);
 		} else if (lastError) {
 			text = `${sitePrefix()}余额: ${lastError}`;
-			color = "error";
 		} else {
 			text = `${sitePrefix()}余额: 更新中...`;
-			color = "dim";
 		}
-		return {
-			text,
-			color,
-			lastTurnText: costSegments().join(" ") || undefined,
-		};
+		const costs = costSegments().join(" ");
+		return costs ? `${text}  ${costs}` : text;
 	}
 
 	/** 页脚余额前缀：供应商显示名，没有名称时用站点域名。 */
@@ -223,99 +177,10 @@ export default function (pi: ExtensionAPI) {
 		return segments;
 	}
 
-	/** 仅在会话仍活跃时请求重绘页脚，避免 shutdown 后空刷。 */
+	/** 把余额写进扩展状态行；不调用 setFooter，避免覆盖 pi-open-tui 等页脚扩展。 */
 	function renderStatus(): void {
-		if (sessionActive) requestFooterRender();
-	}
-
-	/** 替换 Pi 默认页脚，把 CCSwitch 余额嵌进原有 token / 模型行。 */
-	function installFooter(ctx: ExtensionContext): void {
-		if (ctx.mode !== "tui") return;
-		ctx.ui.setStatus(STATUS_ID, undefined);
-		ctx.ui.setFooter((tui, theme, footerData) => {
-			requestFooterRender = () => {
-				if (sessionActive) tui.requestRender();
-			};
-			const unsubscribe = footerData.onBranchChange(requestFooterRender);
-			return {
-				dispose: () => {
-					unsubscribe();
-					requestFooterRender = () => {};
-				},
-				invalidate() {},
-				render(width: number): string[] {
-					let input = 0;
-					let output = 0;
-					let cacheRead = 0;
-					let cacheWrite = 0;
-					let cost = 0;
-					let latestCacheHitRate: number | undefined;
-					for (const entry of ctx.sessionManager.getEntries()) {
-						if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-						const usage = (entry.message as AssistantMessage).usage;
-						input += usage.input;
-						output += usage.output;
-						cacheRead += usage.cacheRead;
-						cacheWrite += usage.cacheWrite;
-						cost += usage.cost.total;
-						const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
-						latestCacheHitRate = promptTokens > 0 ? (usage.cacheRead / promptTokens) * 100 : undefined;
-					}
-
-					let pwd = formatFooterCwd(ctx.sessionManager.getCwd());
-					const branch = footerData.getGitBranch();
-					if (branch) pwd += ` (${branch})`;
-					const sessionName = ctx.sessionManager.getSessionName();
-					if (sessionName) pwd += ` • ${sessionName}`;
-
-					const parts: string[] = [];
-					if (input) parts.push(`↑${formatTokens(input)}`);
-					if (output) parts.push(`↓${formatTokens(output)}`);
-					if (cacheRead) parts.push(`R${formatTokens(cacheRead)}`);
-					if (cacheWrite) parts.push(`W${formatTokens(cacheWrite)}`);
-					if ((cacheRead || cacheWrite) && latestCacheHitRate !== undefined) parts.push(`CH${latestCacheHitRate.toFixed(1)}%`);
-					if (cost) parts.push(`$${cost.toFixed(3)}`);
-
-					const context = ctx.getContextUsage();
-					const contextWindow = context?.contextWindow ?? ctx.model?.contextWindow ?? 0;
-					const contextValue = context?.percent ?? 0;
-					const contextDisplay = context?.percent === null
-						? `?/${formatTokens(contextWindow)} (auto)`
-						: `${contextValue.toFixed(1)}%/${formatTokens(contextWindow)} (auto)`;
-					parts.push(
-						contextValue > 90
-							? theme.fg("error", contextDisplay)
-							: contextValue > 70
-								? theme.fg("warning", contextDisplay)
-								: contextDisplay,
-					);
-					const status = balanceStatus();
-					parts.push(theme.fg(status.color, status.text));
-					if (status.lastTurnText) parts.push(theme.fg("error", status.lastTurnText));
-					let left = parts.join(" ");
-					if (visibleWidth(left) > width) left = truncateToWidth(left, width, "...");
-
-					const modelName = ctx.model?.id || "no-model";
-					const right = ctx.model?.reasoning
-						? `${modelName} • ${ctx.thinkingLevel === "off" ? "thinking off" : ctx.thinkingLevel || "off"}`
-						: modelName;
-					const available = width - visibleWidth(left) - 2;
-					const visibleRight = available > 0 ? truncateToWidth(right, available, "") : "";
-					const padding = " ".repeat(Math.max(0, width - visibleWidth(left) - visibleWidth(visibleRight)));
-					const lines = [
-						truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "...")),
-						theme.fg("dim", left) + theme.fg("dim", padding + visibleRight),
-					];
-
-					const otherStatuses = Array.from(footerData.getExtensionStatuses().entries())
-						.filter(([key]) => key !== STATUS_ID)
-						.sort(([a], [b]) => a.localeCompare(b))
-						.map(([, text]) => sanitizeStatus(text));
-					if (otherStatuses.length) lines.push(truncateToWidth(otherStatuses.join(" "), width, theme.fg("dim", "...")));
-					return lines;
-				},
-			};
-		});
+		if (!sessionActive || !sessionContext || sessionContext.mode !== "tui") return;
+		sessionContext.ui.setStatus(STATUS_ID, balanceStatusText());
 	}
 
 	function clearPeriodicRefresh(): void {
@@ -642,7 +507,6 @@ export default function (pi: ExtensionAPI) {
 		activeSite = undefined;
 		store = emptyStore();
 		clearAccountState();
-		installFooter(ctx);
 		await stopAsyncWork();
 		if (!sessionActive) return;
 		await accountOperations.activate();
@@ -684,9 +548,7 @@ export default function (pi: ExtensionAPI) {
 		sessionActive = false;
 		sessionContext = undefined;
 		stopDiskWatch();
-		requestFooterRender = () => {};
 		ctx.ui.setStatus(STATUS_ID, undefined);
-		if (ctx.mode === "tui") ctx.ui.setFooter(undefined);
 		clearAccountState();
 		await stopAsyncWork();
 		await cleanTemporaryCredentials();

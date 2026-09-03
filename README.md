@@ -29,8 +29,8 @@ Authorization: Bearer <API Key>
 - 页脚显示站点名、余额、上轮消耗、本会话累计
 - 监听 `models.json` / `settings.json`，CCSwitch 切换供应商后页脚跟随
 - 每轮 Agent 结束后刷新，并在 1/3/6 秒补查异步结算
-- 余额低于 `$1` 黄色，低于 `$0.2` 红色
-- 本插件会替换 Pi 默认页脚，请勿与其他 footer 扩展同时安装
+- 余额低于 `$1` / `$0.2` 时仍在状态行标出当前数字；不替换整个页脚
+- 通过 `setStatus` 写入扩展状态行，可与 `pi-open-tui` 等页脚扩展共存
 
 ## 安装
 
