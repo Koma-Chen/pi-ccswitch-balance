@@ -1,6 +1,6 @@
 {
   "name": "pi-ccswitch-balance",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Show CCSwitch account balance in the Pi footer. / 在 Pi 页脚显示 CCSwitch 账户余额与消耗。",
   "author": "Koma-Chen",
   "repository": {
